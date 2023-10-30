@@ -1,0 +1,325 @@
+-----------------------------------------mysql installation----------------------------------------------------------
+
+
+sudo apt-get install mysql-server mysql-client -y
+
+service mysql status
+
+sudo mysql -u root -p
+
+# Give password to mysql
+mysql> ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'root@123';
+
+mysql> show databases;
+mysql> CREATE DATABASE retail_db;
+mysql> show databases;
+mysql> USE retail_db;
+mysql> show tables;
+mysql> exit
+
+Copy create_db.sql file from local to linux server(ec2 instance)
+
+sudo mysql -u root -p retail_db < create_db.sql
+mysql> sudo mysql -u root -p
+mysql> show databases;
+mysql> use retail_db;
+mysql> show tables;
+mysql> desc categories;
+mysql> desc customers;
+mysql> desc departments;
+mysql> desc order_items;
+mysql> desc orders;
+mysql> select * from categories limit 10;
+mysql> select * from customers limit 10;
+mysql> select * from departments limit 10;
+mysql> select * from order_items limit 10;
+mysql> select * from orders limit 10;
+mysql> exit;
+
+APACHE SQOOP-------------------------------------------------------------------------------------
+
+wget http://archive.apache.org/dist/sqoop/1.4.4/sqoop-1.4.4.bin__hadoop-1.0.0.tar.gz
+
+tar -zxf sqoop-1.4.4.bin__hadoop-1.0.0.tar.gz
+
+sudo mv sqoop-1.4.4.bin__hadoop-1.0.0 /usr/local/sqoop/
+
+nano ~/.bashrc
+export SQOOP_PREFIX="/usr/local/sqoop/"
+export SQOOP_CONF_DIR="$SQOOP_PREFIX/conf"
+export SQOOP_CLASSPATH="$SQOOP_CONF_DIR"
+export PATH="$SQOOP_PREFIX/bin:$PATH"
+
+exec bash
+
+cd $SQOOP_PREFIX/conf
+
+mv sqoop-env-template.sh sqoop-env.sh
+
+nano sqoop-env.sh
+export HADOOP_COMMON_HOME=/usr/local/hadoop 
+export HADOOP_MAPRED_HOME=/usr/local/hadoop
+export ZOOKEPER_HOME=$ZOOKEEPER_HOME
+export HBASE_HOME=$HBASE_HOME
+export HIVE_HOME=$HIVE_HOME
+ 
+**(jdbc connecter download krenge sqoop-sql ke sath communication ke lye)**
+
+wget https://dev.mysql.com/get/Downloads/Connector-J/mysql-connector-j_8.0.33-1ubuntu20.04_all.deb
+
+**(debianpackage--We use the dpkg command to interact with packages on our system.)**
+
+dpkg -x mysql-connector-j_8.0.33-1ubuntu20.04_all.deb ./
+
+cp usr/share/java/mysql-connector-j-8.0.33.jar /usr/local/sqoop/lib/
+
+cd $SQOOP_PREFIX/bin
+
+sqoop-version
+
+**{sqoop se my sql ka data search krne ke leye}**--from ubuntu
+
+sqoop list-databases --connect jdbc:mysql://localhost --username root -P
+
+sqoop list-tables --connect jdbc:mysql://localhost/retail_db --username root -P
+
+sqoop eval --connect jdbc:mysql://localhost/retail_db --username root -P --query "select * from customers limit 10"
+
+1.categories
+
+--as-parquetfile
+
+was added in Sqoop 1.4.6 (CDH 5.5). **(loading data in HDFS)**
+
+sqoop import --connect jdbc:mysql://localhost/retail_db --username root --password 123 -m 1 --query "Select * from categories WHERE \$CONDITIONS" --delete-target-dir --target-dir /user/cloudera/retail_db/categories
+
+**(the data will load in 	hdfs )**
+
+hadoop fs -ls /user/cloudera/retail_db/categories
+
+hadoop fs -cat  /user/cloudera/retail_db/categories/part-m-00000
+
+****{abhi data agaya hdfs ke dir pr, IMPORT hogaya abhi HIVE ka external table banayenge hdfs dir ke uppar hum external table banayenge}****
+
+*********************HIVE Installation(Data Query)************************
+----- databases(((set hive.cli.print.current.db=true;)))--------
+
+sudo apt-get update && sudo apt-get upgrade -y  {repo upgrade}
+
+wget https://dlcdn.apache.org/hive/hive-1.2.2/apache-hive-1.2.2-bin.tar.gz
+
+tar -xzvf apache-hive-1.2.2-bin.tar.gz
+
+sudo mv apache-hive-1.2.2-bin /usr/local/hive
+
+nano ~/.bashrc
+export HIVE_HOME=/usr/local/hive
+export PATH=$PATH:/usr/local/hive/bin
+
+bash
+
+cp $HIVE_HOME/conf/hive-env.sh.template $HIVE_HOME/conf/hive-env.sh
+cat>>$HIVE_HOME/conf/hive-env.sh<<EOL
+export HADOOP_HOME=/usr/local/hadoop
+EOL
+
+hadoop fs -mkdir /user/ubuntu/
+
+hive 
+(it will throw an error, we do this just so that tmp directory gets created for further processes of hive)
+
+***{tmp dir ko access dene ke badd hi hive chalgea}***
+
+hadoop fs -chmod -R 777 /tmp
+
+cd
+
+hive
+exit;
+
+***{{now we will make EXTERNAL TABLE ON HIVE OF CATEGORIES TABLE}}***
+**(FIRST you will need database in hive ))**
+
+Hive
+----
+
+hive 
+
+DROP DATABASE IF EXISTS retail_db;
+CREATE DATABASE IF NOT EXISTS retail_db;
+
+hive> show databases;
+
+2.categories
+-------------
+
+DROP TABLE IF EXISTS retail_db.categories;
+CREATE EXTERNAL TABLE IF NOT EXISTS retail_db.categories (
+category_id int,
+category_department_id int,
+category_name string
+)
+row format delimited 
+fields terminated by ','
+LOCATION '/user/cloudera/retail_db/categories';
+
+**{location- external table ko bol raha hu ye sqoop ke ye location se data download kiya hai is location se data le external table bana and meta data update kr}**
+
+select * from retail_db.categories limit 10;
+
+____this is data eng pipeline --- developers daytoday activities_______
+----we created 	EXTERNAL TABLE without partition----
+RDBMS >> HIVE (we created ETL)
+
+__**<< we are making EXTERNAL TABLE WITH PARTITIONING>>**__
+
+4.order_items
+
+ubuntu@ip$
+  sqoop import \
+  --connect jdbc:mysql://localhost/retail_db \
+  --username=root \
+  --password=root@123 \
+  --table order_items \
+  --delete-target-dir \
+  --target-dir=/user/cloudera/retail_db/order_items/order_month=202306
+
+**{order_item is path table dir / uske badd wala partition banega dir ke andar file banega [order_month=2023 ye partition file hai] }**
+
+hive>
+
+2.order_items(partition)
+------------------------
+**{{data load ke time partition krnge fir table load krengee}}**
+
+DROP TABLE IF EXISTS retail_db.order_items;
+CREATE EXTERNAL TABLE IF NOT EXISTS retail_db.order_items (
+order_item_id int,
+order_item_order_id int,
+order_item_order_date string,
+order_item_product_id int,
+order_item_quantity smallint,
+order_item_subtotal float,
+order_item_product_price float
+)
+PARTITIONED BY (order_month string)
+row format delimited 
+fields terminated by ','
+LOCATION '/user/cloudera/retail_db/order_items';
+
+select * from retail_db.order_items limit 10;
+
+*******{{{{{{{jaha tak table ki dir hai waha tak hive ko samjta hai and data we are loading from backend -sqoop manual dir banaya data dump kiya backend se hua JAB AP KABHI BHI MANUALLY FILE BANOGE AND LOAD KROGE TABLE DIR KE ANDAR PARTITION WAY MAI WO META DATA KO PATA NAHI CHALTA / table dir tak pata hai metastore ko}}}}}******
+
+***to make it sink***
+msck repair table retail_db.order_items;
+
+select * from retail_db.order_items limit 10;
+-----------------------------------------------------------------------
+
+To load CSV data into a Hive partitioned table, you'll need to follow these steps:
+
+Step 1: Create the Hive partitioned table
+
+Assuming you have already set up Hive, you can create a partitioned table using the `PARTITIONED BY` clause in the `CREATE TABLE` statement. In this example, we'll create a table to store employee data partitioned by the "department" column.
+
+DROP TABLE IF EXISTS retail_db.employee_table;
+CREATE EXTERNAL TABLE employee_table (
+    emp_id INT,
+    emp_name STRING,
+    salary DOUBLE
+)
+PARTITIONED BY (department STRING)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE
+LOCATION '/user/cloudera/retail_db/employee_table';
+
+Step 2: Prepare the CSV data
+
+For this example, let's assume the CSV data is in the following format and stored in a file named `employee_data.csv`:
+
+vi employee_data.csv
+
+101,John Doe,50000,HR
+102,Jane Smith,60000,Engineering
+103,Bob Johnson,55000,HR
+104,Susan Lee,65000,Engineering
+
+***---loading data from local path to hive---- ***
+
+Load the CSV data into the table
+
+hive>
+
+LOAD DATA LOCAL INPATH '/home/ubuntu/employee_data.csv'
+OVERWRITE INTO TABLE employee_table
+PARTITION (department='HR');
+
+****--- one more partition---****
+
+LOAD DATA LOCAL INPATH '/home/ubuntu/employee_data.csv'
+OVERWRITE INTO TABLE employee_table
+PARTITION (department='Engineering');
+
+----total 2 partition had done {HR} & {ENGINEETING}---
+
+Step 4:Verify the data 
+
+select * from employee_table limit 10;
+show partitions employee_table;
+---------------------------------------------------------------------
+Step 1:-Create a external table --EVERTHING WE ARE DOING MANUALLY --
+
+DROP TABLE IF EXISTS retail_db.employee;
+CREATE EXTERNAL TABLE IF NOT EXISTS retail_db.employee (
+id int,
+name string,
+age int,
+gender string )
+PARTITIONED BY (bus_dt string)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+LOCATION '/user/cloudera/retail_db/employee';
+  
+Step 2:-prepare a csv file 
+
+vi employee.csv --file name
+
+1,james,30,M
+2,Ann,40,F
+3,Jeff,41,M
+4,Jennifer,20,F
+
+tep 3:-Create a hdfs partition directory
+
+hadoop fs -mkdir /user/cloudera/retail_db/employee/bus_dt=20230704
+
+Step 4:-Copy file from local to hdfs partition directory
+
+hadoop fs -put /home/ubuntu/employee.csv /user/cloudera/retail_db/employee/bus_dt=20230704
+
+Step 5:-Verify the file
+
+hadoop fs -ls /user/cloudera/retail_db/employee/bus_dt=20230704
+
+Step 6 :- Verify the data in the hive table
+
+hive 
+
+select * from retail_db.employee limit 10;
+
+Step 7 :-Refresh Hive Metadata
+
+msck repair table retail_db.employee;
+
+Step 8 :- Verify the data in the hive table
+
+select * from retail_db.employee limit 10;
+
+-----{{ toh hum jabhi bhi manually data load krenge asitis partitions mai
+copy paste krenge PART likh ke nahi ayenga jab hadoop eco sys se load kroge tabbhi part-m-00000 likhega}}-----
+
+
+
+
